@@ -1,7 +1,11 @@
 package controller
 
 import (
+	"bytes"
+	"encoding/json"
+	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -45,6 +49,34 @@ func authentication(context *gin.Context) {
 		"token_type":   "Bearer",
 		"expires_in":   570,
 	})
+}
+
+func broastcastConfiguration(context *gin.Context, body *qa.Config) {
+	isBroadcast := context.Query("isBroadcast")
+	if isBroadcast != "yes" {
+
+		currentIp, _ := getCurrentIp()
+
+		serviceIps, _ := discoveryServices()
+
+		for _, ip := range serviceIps {
+			if ip == nil || ip.To4() == nil || ip.To4().String() == currentIp.To4().String() {
+				continue
+			}
+
+			url := "http://" + ip.To4().String() + ":9999" + context.Request.URL.Path + "?isBroadcast=yes"
+
+			if context.Request.Method == http.MethodPost {
+				json_body, _ := json.Marshal(body)
+				http.Post(url, "application/json", bytes.NewReader(json_body))
+			}
+
+			if context.Request.Method == http.MethodDelete {
+				req, _ := http.NewRequest(http.MethodDelete, url, nil)
+				http.DefaultClient.Do(req)
+			}
+		}
+	}
 }
 
 func searchResource(context *gin.Context) {
@@ -111,6 +143,7 @@ func configurationGetResourceById(context *gin.Context) {
 	}
 
 	CONFIGURATION[key] = &body
+	broastcastConfiguration(context, &body)
 	context.JSON(http.StatusOK, gin.H{"message": "OK"})
 }
 
@@ -125,6 +158,7 @@ func configurationCreateResource(context *gin.Context) {
 	}
 
 	CONFIGURATION[key] = &body
+	broastcastConfiguration(context, &body)
 	context.JSON(http.StatusOK, gin.H{"message": "OK"})
 }
 
@@ -139,24 +173,25 @@ func configurationSearchResource(context *gin.Context) {
 	}
 
 	CONFIGURATION[key] = &body
+	broastcastConfiguration(context, &body)
 	context.JSON(http.StatusOK, gin.H{"message": "OK"})
 }
 
 func deleteconfigurationGetResourceById(context *gin.Context) {
 	delete(CONFIGURATION, keyGetConfiguration(context))
-
+	broastcastConfiguration(context, nil)
 	context.JSON(http.StatusOK, gin.H{"message": "OK"})
 }
 
 func deleteconfigurationCreateResource(context *gin.Context) {
 	delete(CONFIGURATION, keyCreateConfiguration(context))
-
+	broastcastConfiguration(context, nil)
 	context.JSON(http.StatusOK, gin.H{"message": "OK"})
 }
 
 func deleteconfigurationSearchResource(context *gin.Context) {
 	delete(CONFIGURATION, keySearchConfiguration(context))
-
+	broastcastConfiguration(context, nil)
 	context.JSON(http.StatusOK, gin.H{"message": "OK"})
 }
 
@@ -177,4 +212,30 @@ func keySearchConfiguration(context *gin.Context) string {
 	resource := context.Param("resource")
 	key := "search/" + resource
 	return key
+}
+
+func discoveryServices() ([]net.IP, error) {
+	return net.LookupIP(os.Getenv("SERVICES"))
+}
+
+func getCurrentIp() (net.IP, error) {
+
+	iface, err := net.InterfaceByName("eth0")
+
+	if err != nil {
+		return nil, err
+	}
+
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, addr := range addrs {
+		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() && ipnet.IP.To4() != nil {
+			return ipnet.IP, nil
+		}
+	}
+
+	return nil, nil
 }
